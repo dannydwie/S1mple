@@ -1,7 +1,9 @@
-name: Build SimpleLogics Android
+name: Build SimpleLogics ARM64
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
@@ -11,34 +13,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android SDK
+      - name: Install Android NDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: ''
 
       - name: Install NDK
         run: |
-          yes | sdkmanager --licenses || true
           sdkmanager "ndk;27.2.12479018"
 
-      - name: Build SimpleLogics ARM64
+      - name: Clone Stockfish
         run: |
-          export NDK="$ANDROID_HOME/ndk/27.2.12479018"
-          export TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish
 
-          "$TOOLCHAIN/bin/aarch64-linux-android24-clang++" \
-            -O3 \
-            -std=c++17 \
-            -DNDEBUG \
-            -static-libstdc++ \
-            simplelogics.cpp \
-            -o simplelogics
+      - name: Build ARM64
+        working-directory: stockfish/src
+        run: |
+          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
 
-          file simplelogics
+          make -j2 build \
+            ARCH=armv8 \
+            COMP=ndk \
+            OS=Android \
+            optimize=yes \
+            debug=no
+
+      - name: Rename engine
+        run: |
+          mkdir -p release
+          cp stockfish/src/stockfish release/simplelogics
+
+      - name: Download official NNUE
+        run: |
+          cd release
+
+          wget -q \
+          https://tests.stockfishchess.org/api/nn/nn-134a887f4c8f.nnue \
+          -O simplelogics.nnue
+
           chmod +x simplelogics
 
-      - name: Upload DroidFish Engine
+      - name: Package
+        run: |
+          cd release
+          zip -9 simplelogics-arm64.zip simplelogics simplelogics.nnue
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLogics-Android-ARM64
-          path: simplelogics
+          name: simplelogics-arm64
+          path: release/simplelogics-arm64.zip
