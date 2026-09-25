@@ -11,31 +11,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''
 
       - name: Install NDK
-        run: sdkmanager "ndk;27.2.12479018"
-
-      - name: Build ARM64
         run: |
-          export NDK=$ANDROID_SDK_ROOT/ndk/27.2.12479018
-          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export CXX=$TOOLCHAIN/bin/aarch64-linux-android24-clang++
+          yes | sdkmanager --licenses || true
+          sdkmanager "ndk;27.2.12479018"
 
-          $CXX -O3 -std=c++17 -DNDEBUG \
+      - name: Build SimpleLogics ARM64
+        run: |
+          export NDK="$ANDROID_HOME/ndk/27.2.12479018"
+          export TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
+          "$TOOLCHAIN/bin/aarch64-linux-android24-clang++" \
+            -O3 \
+            -std=c++17 \
+            -DNDEBUG \
+            -static-libstdc++ \
             simplelogics.cpp \
             -o simplelogics
 
+          file simplelogics
           chmod +x simplelogics
 
-      - name: Upload Engine
+      - name: Upload DroidFish Engine
         uses: actions/upload-artifact@v4
         with:
           name: SimpleLogics-Android-ARM64
