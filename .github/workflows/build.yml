@@ -20,15 +20,25 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
+      - name: Setup Android
         uses: android-actions/setup-android@v4
-        with:
-          packages: ''
 
       - name: Install NDK
         run: |
           sdkmanager --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Clone Stockfish
+        run: |
+          git clone --depth 1 \
+            https://github.com/official-stockfish/Stockfish.git \
+            stockfish
+
+      - name: Check source
+        run: |
+          test -f stockfish/src/Makefile
+          test -f stockfish/src/main.cpp
+          echo "Stockfish source OK"
 
       - name: Build Stockfish ARM64
         working-directory: stockfish/src
@@ -42,19 +52,19 @@ jobs:
             optimize=yes \
             debug=no
 
-      - name: Prepare DroidFish package
+      - name: Prepare DroidFish
         run: |
           mkdir -p release
-
           cp stockfish/src/stockfish release/simplelogics
-
           chmod +x release/simplelogics
 
       - name: Download NNUE
         run: |
           wget -q \
-          https://tests.stockfishchess.org/api/nn/nn-134a887f4c8f.nnue \
-          -O release/simplelogics.nnue
+            "https://tests.stockfishchess.org/api/nn/nn-134a887f4c8f.nnue" \
+            -O release/simplelogics.nnue
+
+          test -s release/simplelogics.nnue
 
       - name: Package
         run: |
@@ -63,7 +73,7 @@ jobs:
             simplelogics \
             simplelogics.nnue
 
-      - name: Upload DroidFish Engine
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: simplelogics-arm64-droidfish
