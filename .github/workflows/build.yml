@@ -1,0 +1,42 @@
+name: Build SimpleLogics Android
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;27.2.12479018"
+
+      - name: Build ARM64
+        run: |
+          export NDK=$ANDROID_SDK_ROOT/ndk/27.2.12479018
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export CXX=$TOOLCHAIN/bin/aarch64-linux-android24-clang++
+
+          $CXX -O3 -std=c++17 -DNDEBUG \
+            simplelogics.cpp \
+            -o simplelogics
+
+          chmod +x simplelogics
+
+      - name: Upload Engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLogics-Android-ARM64
+          path: simplelogics
