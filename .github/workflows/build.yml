@@ -20,27 +20,26 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install NDK
+      - name: Install Android NDK
         run: |
           sdkmanager --install "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Clone Stockfish
+      - name: Download Stockfish source
         run: |
           git clone --depth 1 \
             https://github.com/official-stockfish/Stockfish.git \
             stockfish
 
-      - name: Check source
+      - name: Download official NNUE
+        working-directory: stockfish/src
         run: |
-          test -f stockfish/src/Makefile
-          test -f stockfish/src/main.cpp
-          echo "Stockfish source OK"
+          make net
 
-      - name: Build Stockfish ARM64
+      - name: Build ARM64 Android with embedded NNUE
         working-directory: stockfish/src
         run: |
           export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
@@ -52,29 +51,35 @@ jobs:
             optimize=yes \
             debug=no
 
-      - name: Prepare DroidFish
+      - name: Strip binary
+        working-directory: stockfish/src
+        run: |
+          llvm-strip stockfish || true
+          ls -lh stockfish
+
+      - name: Verify engine
+        working-directory: stockfish/src
+        run: |
+          printf "uci\nquit\n" | ./stockfish | head -30
+
+      - name: Prepare DroidFish engine
         run: |
           mkdir -p release
           cp stockfish/src/stockfish release/simplelogics
           chmod +x release/simplelogics
 
-      - name: Download NNUE
+      - name: Show final size
         run: |
-          wget -q \
-            "https://tests.stockfishchess.org/api/nn/nn-134a887f4c8f.nnue" \
-            -O release/simplelogics.nnue
-
-          test -s release/simplelogics.nnue
+          ls -lh release/simplelogics
+          file release/simplelogics
 
       - name: Package
         run: |
           cd release
-          zip -9 simplelogics-arm64.zip \
-            simplelogics \
-            simplelogics.nnue
+          zip -9 simplelogics-arm64-droidfish.zip simplelogics
 
-      - name: Upload
+      - name: Upload DroidFish engine
         uses: actions/upload-artifact@v4
         with:
           name: simplelogics-arm64-droidfish
-          path: release/simplelogics-arm64.zip
+          path: release/simplelogics-arm64-droidfish.zip
