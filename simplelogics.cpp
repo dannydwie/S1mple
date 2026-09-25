@@ -77,7 +77,10 @@ struct Undo {
     int half;
     int full;
 };
-
+static void undoMove(
+    const Move& m,
+    const Undo& u
+);
 struct TTEntry {
     uint64_t key=0;
     int depth=-1;
