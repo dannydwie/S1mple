@@ -1,85 +1,237 @@
-name: Build SimpleLogics ARM64
+name: Train and Build SimpleLogics NNUE
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  build:
+  train-and-build:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          python-version: "3.11"
+
+      - name: Install PyTorch
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch numpy
+
+      # --------------------------------------------------
+      # Create training data
+      # --------------------------------------------------
+
+      - name: Create training dataset
+        run: |
+          mkdir -p training
+
+          cat > training/train.txt <<'EOF'
+          rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 0
+          rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1 | 20
+          rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2 | 0
+          r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3 | 10
+          r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 2 3 | 15
+          EOF
+
+      # --------------------------------------------------
+      # Train NNUE
+      # --------------------------------------------------
+
+      - name: Train SimpleLogics NNUE
+        run: |
+          python train_nnue.py \
+            --data training/train.txt \
+            --output simplelogics.nnue \
+            --checkpoint simplelogics_checkpoint.pt \
+            --epochs 10 \
+            --steps 5000 \
+            --batch 256 \
+            --lr 0.001 \
+            --cpu
+
+      - name: Check NNUE
+        run: |
+          ls -lh simplelogics.nnue
+          test -s simplelogics.nnue
+
+      # --------------------------------------------------
+      # Convert NNUE binary to C++ header
+      # --------------------------------------------------
+
+      - name: Generate embedded NNUE header
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          data = Path("simplelogics.nnue").read_bytes()
+
+          out = []
+
+          out.append("#pragma once")
+          out.append("#include <cstdint>")
+          out.append("")
+
+          # Parse SLNNUE2
+          if data[:7] != b"SLNNUE2":
+              raise RuntimeError("Invalid NNUE format")
+
+          import struct
+
+          off = 7
+
+          inp,h1,h2,outdim = struct.unpack_from(
+              "<IIII",
+              data,
+              off
+          )
+
+          off += 16
+
+          if (inp,h1,h2,outdim) != (768,256,32,1):
+              raise RuntimeError(
+                  f"Unexpected architecture: {(inp,h1,h2,outdim)}"
+              )
+
+          def read_i16(count):
+              global off
+
+              size=count*2
+
+              values=struct.unpack_from(
+                  "<" + "h"*count,
+                  data,
+                  off
+              )
+
+              off+=size
+
+              return values
+
+          w1=read_i16(768*256)
+          b1=read_i16(256)
+
+          w2=read_i16(256*32)
+          b2=read_i16(32)
+
+          wo=read_i16(32)
+          bo=read_i16(1)
+
+          def emit(name, values):
+
+              out.append(
+                  f"static const int16_t {name}[{len(values)}] = {{"
+              )
+
+              line=[]
+
+              for i,v in enumerate(values):
+
+                  line.append(str(v))
+
+                  if len(line)>=16:
+
+                      out.append(
+                          ",".join(line)+","
+                      )
+
+                      line=[]
+
+              if line:
+                  out.append(
+                      ",".join(line)
+                  )
+
+              out.append("};")
+              out.append("")
+
+          emit("SL_W1",w1)
+          emit("SL_B1",b1)
+          emit("SL_W2",w2)
+          emit("SL_B2",b2)
+          emit("SL_WO",wo)
+          emit("SL_BO",bo)
+
+          Path("nnue_data.h").write_text(
+              "\n".join(out)
+          )
+
+          print("Generated nnue_data.h")
+          PY
+
+      - name: Check embedded network
+        run: |
+          ls -lh nnue_data.h
+
+      # --------------------------------------------------
+      # Android NDK
+      # --------------------------------------------------
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install Android NDK
+      - name: Install NDK
         run: |
           sdkmanager --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Download Stockfish source
+      # --------------------------------------------------
+      # Compile ARM64
+      # --------------------------------------------------
+
+      - name: Build ARM64
         run: |
-          git clone --depth 1 \
-            https://github.com/official-stockfish/Stockfish.git \
-            stockfish
+          export NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
 
-      - name: Download official NNUE
-        working-directory: stockfish/src
-        run: |
-          make net
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++" \
+            -O3 \
+            -flto \
+            -DNDEBUG \
+            -std=c++17 \
+            -march=armv8-a \
+            -mtune=cortex-a76 \
+            simplelogics.cpp \
+            -o simplelogics
 
-      - name: Build ARM64 Android with embedded NNUE
-        working-directory: stockfish/src
-        run: |
-          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-
-          make -j2 build \
-            ARCH=armv8 \
-            COMP=ndk \
-            OS=Android \
-            optimize=yes \
-            debug=no
+      # --------------------------------------------------
+      # Strip
+      # --------------------------------------------------
 
       - name: Strip binary
-        working-directory: stockfish/src
         run: |
-          llvm-strip stockfish || true
-          ls -lh stockfish
+          export NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
 
-      - name: Verify engine
-        working-directory: stockfish/src
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            simplelogics
+
+          ls -lh simplelogics
+
+      # --------------------------------------------------
+      # UCI test
+      # --------------------------------------------------
+
+      - name: Test UCI
         run: |
-          printf "uci\nquit\n" | ./stockfish | head -30
+          printf "uci\nisready\nquit\n" | ./simplelogics
 
-      - name: Prepare DroidFish engine
+      # --------------------------------------------------
+      # Package
+      # --------------------------------------------------
+
+      - name: Package DroidFish engine
         run: |
           mkdir -p release
-          cp stockfish/src/stockfish release/simplelogics
+          cp simplelogics release/simplelogics
           chmod +x release/simplelogics
 
-      - name: Show final size
-        run: |
-          ls -lh release/simplelogics
-          file release/simplelogics
-
-      - name: Package
-        run: |
           cd release
-          zip -9 simplelogics-arm64-droidfish.zip simplelogics
+          zip -9 simplelogics-droidfish-arm64.zip simplelogics
 
-      - name: Upload DroidFish engine
+      - name: Upload engine
         uses: actions/upload-artifact@v4
         with:
-          name: simplelogics-arm64-droidfish
-          path: release/simplelogics-arm64-droidfish.zip
+          name: SimpleLogics-NNUE-DroidFish-ARM64
+          path: release/simplelogics-droidfish-arm64.zip
